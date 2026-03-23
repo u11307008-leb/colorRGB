@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>03-02 顏色追蹤</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+    <style>body { font-family: Inter, sans-serif; }</style>
+  </head>
+  <body class="min-h-screen bg-slate-950 p-6 text-slate-100">
+    <a class="text-cyan-400 hover:text-lime-400" href="index.html">← 返回課程表</a>
+    <div class="mx-auto mt-6 max-w-3xl">
+      <h1 class="mb-4 text-xl font-semibold">練習 03-02｜全畫面顏色追蹤</h1>
+      <p class="mb-2 text-sm text-slate-400">
+        目標色 RGB = (186, 40, 8)；偵測到目標色時會顯示紅色方框，並依進入次數切換音樂播放/停止。
+      </p>
+      <div class="mb-4 flex gap-2">
+        <button id="start" class="rounded-xl border border-cyan-400/50 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-200">
+          開啟攝影機
+        </button>
+        <button id="open-settings" class="rounded-xl border border-violet-400/50 bg-violet-500/10 px-4 py-2 text-sm text-violet-200">
+          設定目標色
+        </button>
+      </div>
+      <div class="relative inline-block">
+        <video id="video" class="hidden" playsinline muted></video>
+        <canvas id="canvas" class="max-h-[70vh] rounded-lg border border-cyan-500/30 bg-black"></canvas>
+        <p
+          id="music-status"
+          class="pointer-events-none absolute left-3 top-3 rounded-md border border-amber-400/60 bg-amber-950/70 px-3 py-1 text-sm text-amber-200"
+        >
+          音樂暫停中
+        </p>
+        <div id="settings-panel" class="pointer-events-none absolute inset-x-3 bottom-3 hidden rounded-md border border-violet-400/60 bg-slate-900/85 p-3 text-sm">
+          <p id="settings-hint" class="mb-2 text-violet-100">
+            設定模式：請點擊畫面取色
+          </p>
+          <div class="mb-2 grid gap-2 text-xs text-slate-200 sm:grid-cols-2">
+            <div class="rounded-md border border-slate-600/70 bg-slate-800/60 p-2">
+              <p class="mb-1">播放/暫停 目標色</p>
+              <div class="flex items-center gap-2">
+                <span id="play-target-swatch" class="inline-block h-5 w-5 rounded border border-slate-300/60"></span>
+                <span id="play-target-rgb"></span>
+              </div>
+            </div>
+            <div class="rounded-md border border-slate-600/70 bg-slate-800/60 p-2">
+              <p class="mb-1">音量 目標色</p>
+              <div class="flex items-center gap-2">
+                <span id="volume-target-swatch" class="inline-block h-5 w-5 rounded border border-slate-300/60"></span>
+                <span id="volume-target-rgb"></span>
+              </div>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button id="set-play-target" class="pointer-events-auto rounded-lg border border-violet-300/60 bg-violet-500/10 px-3 py-1 text-xs text-violet-100">
+              設定 播放/暫停 目標色
+            </button>
+            <button id="set-volume-target" class="pointer-events-auto rounded-lg border border-slate-500/60 bg-slate-700/30 px-3 py-1 text-xs text-slate-200">
+              設定 音量 目標色
+            </button>
+            <button id="close-settings" class="pointer-events-auto rounded-lg border border-lime-400/60 bg-lime-500/10 px-3 py-1 text-xs text-lime-200">
+              設定完成
+            </button>
+          </div>
+        </div>
+      </div>
+      <p id="status" class="mt-4 rounded-lg border border-slate-700 bg-slate-900/80 p-3 text-sm text-slate-300">
+        平均 RGB：—　距離：—
+      </p>
+    </div>
+    <script>
+      let TARGET = { r: 186, g: 40, b: 8 };
+      let VOLUME_TARGET = { r: 205, g: 189, b: 43 };
+      const DIST_MAX = 50;
+      const TRACK_SAMPLE_STEP = 4;
+      const MARKER_BOX_SIZE = 48;
+      const video = document.getElementById("video");
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const statusEl = document.getElementById("status");
+      const musicStatusEl = document.getElementById("music-status");
+      const settingsPanelEl = document.getElementById("settings-panel");
+      const settingsHintEl = document.getElementById("settings-hint");
+      const setPlayTargetBtn = document.getElementById("set-play-target");
+      const setVolumeTargetBtn = document.getElementById("set-volume-target");
+      const playTargetSwatchEl = document.getElementById("play-target-swatch");
+      const playTargetRgbEl = document.getElementById("play-target-rgb");
+      const volumeTargetSwatchEl = document.getElementById("volume-target-swatch");
+      const volumeTargetRgbEl = document.getElementById("volume-target-rgb");
+      let isRunning = false;
+      let isSettingMode = false;
+      let settingTargetType = "play";
+      let prevHasTarget = false;
+      let wasSettingMode = false;
+      let playOnNextEnter = true;
+
+      // 修正後的音樂路徑 (GitHub Raw 連結)
+      const music = new Audio("https://raw.githubusercontent.com/u11307008-leb/colorRGB/d390e909753db46e884515770ee4c7e3241d1b72/music.mp3");
+      music.crossOrigin = "anonymous"; // 增加跨域許可
+      music.loop = true;
+
+      function setMusicStatus(isPlaying) {
+        musicStatusEl.textContent = isPlaying ? "音樂播放中" : "音樂暫停中";
+        musicStatusEl.className =
+          "pointer-events-none absolute left-3 top-3 rounded-md border px-3 py-1 text-sm " +
+          (isPlaying
+            ? "border-lime-400/60 bg-lime-950/70 text-lime-200"
+            : "border-amber-400/60 bg-amber-950/70 text-amber-200");
+      }
+
+      function euclidean(a, b) {
+        return Math.sqrt(
+          (a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2
+        );
+      }
+
+      function rectAroundCentroid(cx, cy, size, cw, ch) {
+        const half = size / 2;
+        const rx = Math.max(0, Math.min(cw - size, Math.round(cx - half)));
+        const ry = Math.max(0, Math.min(ch - size, Math.round(cy - half)));
+        return { rx, ry };
+      }
+
+      function setSettingTargetType(type) {
+        settingTargetType = type;
+        const isPlay = type === "play";
+        setPlayTargetBtn.className =
+          "pointer-events-auto rounded-lg border px-3 py-1 text-xs " +
+          (isPlay
+            ? "border-violet-300/60 bg-violet-500/10 text-violet-100"
+            : "border-slate-500/60 bg-slate-700/30 text-slate-200");
+        setVolumeTargetBtn.className =
+          "pointer-events-auto rounded-lg border px-3 py-1 text-xs " +
+          (!isPlay
+            ? "border-violet-300/60 bg-violet-500/10 text-violet-100"
+            : "border-slate-500/60 bg-slate-700/30 text-slate-200");
+      }
+
+      function updateSettingsHint() {
+        settingsHintEl.textContent =
+          "設定模式：點擊畫面取色（目前：" +
+          (settingTargetType === "play" ? "播放/暫停" : "音量") +
+          "）";
+      }
+
+      function updateTargetPreview() {
+        playTargetSwatchEl.style.backgroundColor = `rgb(${TARGET.r}, ${TARGET.g}, ${TARGET.b})`;
+        volumeTargetSwatchEl.style.backgroundColor = `rgb(${VOLUME_TARGET.r}, ${VOLUME_TARGET.g}, ${VOLUME_TARGET.b})`;
+        playTargetRgbEl.textContent = `R:${TARGET.r} G:${TARGET.g} B:${TARGET.b}`;
+        volumeTargetRgbEl.textContent = `R:${VOLUME_TARGET.r} G:${VOLUME_TARGET.g} B:${VOLUME_TARGET.b}`;
+      }
+
+      function loop() {
+        if (video.videoWidth) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const full = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const fd = full.data;
+          let sumX = 0, sumY = 0, hit = 0;
+          let volSumY = 0, volHit = 0, volSumX = 0;
+
+          for (let y = 0; y < canvas.height; y += TRACK_SAMPLE_STEP) {
+            for (let x = 0; x < canvas.width; x += TRACK_SAMPLE_STEP) {
+              const idx = (y * canvas.width + x) * 4;
+              const currentPixel = { r: fd[idx], g: fd[idx + 1], b: fd[idx + 2] };
+              
+              const distPx = euclidean(currentPixel, TARGET);
+              if (distPx < DIST_MAX) {
+                sumX += x; sumY += y; hit++;
+              }
+              const distVol = euclidean(currentPixel, VOLUME_TARGET);
+              if (distVol < DIST_MAX) {
+                volSumX += x; volSumY += y; volHit++;
+              }
+            }
+          }
+
+          const hasVolumeTarget = volHit > 0;
+          const hasTarget = hit > 0;
+
+          if (isSettingMode !== wasSettingMode) {
+            prevHasTarget = hasTarget;
+          }
+          wasSettingMode = isSettingMode;
+
+          if (!isSettingMode) {
+            if (hasVolumeTarget) {
+              const avgVolY = volSumY / volHit;
+              const nextVolume = Math.max(0, Math.min(1, 1 - avgVolY / canvas.height));
+              music.volume = nextVolume;
+            }
+            if (hasTarget && !prevHasTarget) {
+              if (playOnNextEnter) {
+                music.play().then(() => setMusicStatus(true)).catch(() => setMusicStatus(false));
+              } else {
+                music.pause();
+                music.currentTime = 0;
+                setMusicStatus(false);
+              }
+              playOnNextEnter = !playOnNextEnter;
+            }
+            prevHasTarget = hasTarget;
+          }
+
+          // 繪製追蹤框
+          if (hasTarget) {
+            const { rx, ry } = rectAroundCentroid(sumX / hit, sumY / hit, MARKER_BOX_SIZE, canvas.width, canvas.height);
+            ctx.strokeStyle = "rgba(239, 68, 68, 0.95)";
+            ctx.lineWidth = 3;
+            ctx.strokeRect(rx, ry, MARKER_BOX_SIZE, MARKER_BOX_SIZE);
+          }
+          if (hasVolumeTarget) {
+            const { rx: vrx, ry: vry } = rectAroundCentroid(volSumX / volHit, volSumY / volHit, MARKER_BOX_SIZE, canvas.width, canvas.height);
+            ctx.strokeStyle = "rgba(251, 191, 36, 0.85)"; // 改為琥珀色區分音量追蹤
+            ctx.lineWidth = 3;
+            ctx.strokeRect(vrx, vry, MARKER_BOX_SIZE, MARKER_BOX_SIZE);
+          }
+
+          statusEl.className = (hasTarget || hasVolumeTarget) 
+            ? "mt-4 rounded-lg border p-3 text-sm border-lime-400/60 bg-lime-950/50 text-lime-200"
+            : "mt-4 rounded-lg border p-3 text-sm border-slate-700 bg-slate-900/80 text-slate-300";
+          
+          statusEl.textContent = `目標 RGB: (${TARGET.r}, ${TARGET.g}, ${TARGET.b}) | 音量: ${Math.round(music.volume * 100)}% | ${hasTarget ? '偵測到播放色' : '未偵測到播放色'}`;
+        }
+        requestAnimationFrame(loop);
+      }
+
+      document.getElementById("start").addEventListener("click", async () => {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+          video.srcObject = stream;
+          await video.play();
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          prevHasTarget = false;
+          playOnNextEnter = true;
+          music.pause();
+          music.currentTime = 0;
+          setMusicStatus(false);
+          if (!isRunning) {
+            isRunning = true;
+            loop();
+          }
+        } catch (err) {
+          alert("無法開啟攝影機，請檢查權限設定。");
+        }
+      });
+
+      document.getElementById("open-settings").addEventListener("click", () => {
+        isSettingMode = true;
+        settingsPanelEl.classList.remove("hidden");
+        setSettingTargetType("play");
+        updateSettingsHint();
+        updateTargetPreview();
+      });
+
+      setPlayTargetBtn.addEventListener("click", () => setSettingTargetType("play"));
+      setVolumeTargetBtn.addEventListener("click", () => setSettingTargetType("volume"));
+      document.getElementById("close-settings").addEventListener("click", () => {
+        isSettingMode = false;
+        settingsPanelEl.classList.add("hidden");
+      });
+
+      canvas.addEventListener("click", (event) => {
+        if (!isSettingMode || !video.videoWidth) return;
+        const rect = canvas.getBoundingClientRect();
+        const sx = canvas.width / rect.width;
+        const sy = canvas.height / rect.height;
+        const x = Math.max(0, Math.min(canvas.width - 1, Math.floor((event.clientX - rect.left) * sx)));
+        const y = Math.max(0, Math.min(canvas.height - 1, Math.floor((event.clientY - rect.top) * sy)));
+        const px = ctx.getImageData(x, y, 1, 1).data;
+        if (settingTargetType === "play") {
+          TARGET = { r: px[0], g: px[1], b: px[2] };
+        } else {
+          VOLUME_TARGET = { r: px[0], g: px[1], b: px[2] };
+        }
+        updateSettingsHint();
+        updateTargetPreview();
+      });
+
+      updateTargetPreview();
+    </script>
+  </body>
+</html>
